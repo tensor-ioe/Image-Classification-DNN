@@ -100,7 +100,8 @@ class Trainer:
                 valid_loss, valid_accuracy = self.validation(self.model, self.validLoader, self.criterion)
                 print(f"Epoch {epoch}/ {self.epochs}\tTraining Loss : {total_loss}\tValidation Loss : {valid_loss}\tValidation Accuracy : {valid_accuracy}")
                 self.model.train()
-                save_model(self.model, f"checkpoint{epoch}")
+                if epoch % 2 == 0 or epoch == (self.epochs-1):
+                    save_model(self.model, f"Checkpoint{epoch}.pth")
 
         dist.destroy_process_group()
 
