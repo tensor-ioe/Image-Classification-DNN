@@ -1,0 +1,5 @@
+LegacyCode.txt
+*.pth
+DataEnv/
+Pistachio_Image_Dataset/
+__pycache__/

@@ -3,7 +3,6 @@ import random
 import numpy as np
 from PIL import Image
 import torch
-from torchvision import transforms
 
 
 def compute_pca_stream(
@@ -87,16 +86,10 @@ def compute_pca_stream(
 
 # 4) Putting it all together
 if __name__ == "__main__":
-    train_dir = ""
+    train_dir = "Pistachio_Image_Dataset/Pistachio_Image_Dataset"
     save_dir = os.path.join(train_dir, "augmented")
     os.makedirs(save_dir, exist_ok=True)
 
-
-    # print("Sampling pixels...")
-    # samples = sample_pixels(train_dir, max_images=2000, pixels_per_image=50000)
-
-    # print("Computing PCA...")
-    # mean, std, eigvals, eigvecs = compute_pca(samples)
 
     print("Computing PCA...")
 
