@@ -122,11 +122,10 @@ class Trainer:
             local_avg_loss = local_loss_sum / local_sample_count
             #loss per example in the epoch
 
+            valid_loss, valid_accuracy = self.validation()
+
             if self.rank == 0:
-                self.model.eval()
-                valid_loss, valid_accuracy = self.validation()
                 print(f"Epoch {epoch}/ {self.epochs}\tTraining Loss : {local_avg_loss}\tValidation Loss : {valid_loss}\tValidation Accuracy : {valid_accuracy}")
-                self.model.train()
                 if epoch % 2 == 0 or epoch == (self.epochs-1):
                     save_model(self.model.module, f"Checkpoint{epoch}.pth")
 
