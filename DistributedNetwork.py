@@ -44,9 +44,9 @@ class Trainer:
             transform=train_transforms
         )
         validSampler = DistributedSampler(valid_dataset, num_replicas=world_size, rank=rank)
-        validLoader  = DataLoader(train_dataset,
+        validLoader  = DataLoader(valid_dataset,
                              batch_size=args.batch_size,
-                             sampler=trainSampler,
+                             sampler=validSampler,
                              num_workers=4,
                              pin_memory=True)
 
@@ -54,7 +54,7 @@ class Trainer:
         self.model     = alexNet().to(self.device)
         self.model     = DDP(self.model, device_ids=[local_rank])
         self.optimizer = optim.Adam(self.model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        self.criterion = nn.CrossEntropyLoss()
+        self.criterion = nn.CrossEntropyLoss(reduction='none')
 
         self.trainLoader = trainLoader
         self.trainSampler = trainSampler
@@ -63,45 +63,72 @@ class Trainer:
         self.epochs  = args.epochs
 
 
-    def validation(self, model, validLoader, criterion):
-        valid_loss = 0
-        accuracy = 0
-        model.eval()
+    def validation(self):
+        self.model.eval()
+        local_loss_sum = 0
+        local_sample_count = 0
+        local_correct=0
         with torch.no_grad():
-            for image, label in validLoader:
-                image, label = image.to(self.device), label.to(self.device)
-                output = model.forward(image)
-                loss = criterion(output, label)
-                valid_loss += loss.item()
-                top_p, top_class = loss.topk(1,dim=1)
-                equality = top_class == label.view(*top_class.self.shape)
-                accuracy += equality.float().mean().item()
-        return valid_loss, accuracy
+            for images, labels in self.validLoader:
+                images, labels = images.to(self.device), labels.to(self.device)
+                outputs = self.model(images)
+
+                # per-sample loss, sum over this batch
+                losses = self.criterion(outputs, labels)       # [batch_size]
+                local_loss_sum    += losses.sum().item()
+                local_sample_count += labels.size(0)
+
+                # count correct predictions in this batch
+                _, preds = outputs.topk(1, dim=1)
+                local_correct += (preds.view(-1) == labels).sum().item()
+
+            # turn to tensors for all_reduce
+            loss_tensor   = torch.tensor(local_loss_sum,    device=self.device)
+            count_tensor  = torch.tensor(local_sample_count, device=self.device)
+            correct_tensor= torch.tensor(local_correct,          device=self.device)
+
+            # sum them across all ranks
+            dist.all_reduce(loss_tensor,  op=dist.ReduceOp.SUM)
+            dist.all_reduce(count_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(correct_tensor,   op=dist.ReduceOp.SUM)
+
+            avg_loss = loss_tensor.item() / count_tensor.item()
+            avg_acc  = correct_tensor.item() / count_tensor.item()
+
+        return avg_loss, avg_acc
     
     def train(self):
         for epoch in range(self.epochs):
             self.model.train()
-            self.sampler.set_epoch(epoch)
-            total_loss = 0.0
+            self.trainSampler.set_epoch(epoch)
+
+            local_loss_sum    = 0.0
+            local_sample_count = 0
+
             for imgs, targets in self.trainLoader:
                 imgs    = imgs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
 
                 self.optimizer.zero_grad()
-                preds = self.model.forward(imgs)
-                loss  = self.criterion(preds, targets)
+                preds = self.model(imgs)
+                losses  = self.criterion(preds, targets)
+                loss=losses.mean()  # average loss over this batch
                 loss.backward()
                 self.optimizer.step()
 
-                total_loss += loss.item()
+                local_loss_sum    += losses.sum().item()      # sum of batch’s per-sample losses
+                local_sample_count += targets.size(0)
+
+            local_avg_loss = local_loss_sum / local_sample_count
+            #loss per example in the epoch
 
             if self.rank == 0:
                 self.model.eval()
-                valid_loss, valid_accuracy = self.validation(self.model, self.validLoader, self.criterion)
-                print(f"Epoch {epoch}/ {self.epochs}\tTraining Loss : {total_loss}\tValidation Loss : {valid_loss}\tValidation Accuracy : {valid_accuracy}")
+                valid_loss, valid_accuracy = self.validation()
+                print(f"Epoch {epoch}/ {self.epochs}\tTraining Loss : {local_avg_loss}\tValidation Loss : {valid_loss}\tValidation Accuracy : {valid_accuracy}")
                 self.model.train()
                 if epoch % 2 == 0 or epoch == (self.epochs-1):
-                    save_model(self.model, f"Checkpoint{epoch}.pth")
+                    save_model(self.model.module, f"Checkpoint{epoch}.pth")
 
         dist.destroy_process_group()
 
